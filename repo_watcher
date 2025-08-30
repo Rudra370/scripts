@@ -1,0 +1,87 @@
+#!/bin/sh
+
+# cd /root/backend
+cd PATH_TO_YOUR_PROJECT_DIRECTORY
+
+# Update remote info
+git fetch origin
+
+BRANCH_NAME=main
+
+changed_files=$(git diff --name-only HEAD..origin/$BRANCH_NAME)
+
+# Replace with your timezone
+DATE=$(TZ="Asia/Kolkata" date "+%Y-%m-%d %H:%M:%S %Z")
+
+# If no changes, exit
+if [ -z "$changed_files" ]; then
+    echo "$DATE: No new changes."
+    exit 0
+fi
+
+echo "$DATE: New changes detected: $changed_files"
+
+# Pull the latest changes
+git pull origin $BRANCH_NAME
+
+LAST_COMMIT_MSG=$(git log -1 --pretty=%B)
+
+
+
+# INFO: Here I added a custom logic to check if the last commit message contains the word "deploy".
+# If not, then I prefer to do the deployment manually.
+# You can remove this or replace this with your own logic.
+if [[ "$LAST_COMMIT_MSG" != *"deploy"* ]]; then
+    echo "$DATE: Last commit message does not contain deploy. Exiting."
+    exit 0
+fi
+
+
+# INFO: Here I added a custom logic to check if any migration files are changed in my django project.
+# In any new migration file has been created or existing migration file is changed, then I prefer to do the migration manually.
+# You can remove this or replace this with your own logic.
+# Check for migrations
+has_migrations=false
+for file in $changed_files; do
+    echo "Checking file: $file"
+    if [[ "$file" == *migrations* ]]; then
+        has_migrations=true
+        break
+    fi
+done
+
+SLACK_URL="https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+
+send_message_to_slack() {
+    local message="$1"
+    curl -X POST -H 'Content-type: application/json' --data '{
+        "text": "'"$message"'"
+    }' $SLACK_URL
+}
+
+if [ "$has_migrations" = true ]; then
+    echo "$DATE: Migration file(s) changed. Skipping deployment."
+else
+    # check if lock file exists
+    if [ -f /tmp/deploy.lock ]; then
+        echo "$DATE: Deploy already in progress. Exiting."
+        send_message_to_slack "Skipping deployment. Another deploy is already in progress. Last commit message: *$LAST_COMMIT_MSG*"
+        exit 0
+    fi
+    
+    # create a lock file to prevent multiple Deploys at the same time
+    touch /tmp/deploy.lock
+
+    send_message_to_slack "New deployment with commit message: *$LAST_COMMIT_MSG*"
+    
+    # YOUR DEPLOYMENT COMMAND OR SCRIPT
+    
+    send_message_to_slack "Deploy command completed. Check logs for details."
+
+    # remove the lock file
+    rm -f /tmp/deploy.lock
+fi
+
+
+# Add this line to your crontab (crontab -e) to run the script every minute
+# * * * * * flock -n /tmp/deploy.lock PATH_TO_YOUR_PROJECT_DIRECTORY/repo_watcher >> /var/log/auto-deploy.log 2>&1
